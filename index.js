@@ -129,7 +129,7 @@ const createHiddenIframe = (target, uri) => {
   return iframe;
 };
 
-const openUriWithHiddenFrame = (uri, failCb, successCb) => {
+const openUriWithHiddenFrame = (uri, successCb, failCb) => {
   const timeout = setTimeout(function() {
     failCb();
     handler.remove();
@@ -146,12 +146,31 @@ const openUriWithHiddenFrame = (uri, failCb, successCb) => {
     successCb();
   };
   const handler = registerEvent(window, "blur", onBlur);
-
   iframe.contentWindow.location.href = uri;
 };
 
-const openUriWithTimeoutHack = (uri, failCb, successCb) => {
-  const timeout = setTimeout(function() {
+function openUriWithTimeoutHack (uri, successCallback, noHandlerCallback) {
+	var  timeout, blurHandler, timeoutHandler;
+
+	function callback (cb) {
+		if (typeof cb === 'function') cb();
+	}
+  timeoutHandler = function () {
+    window.removeEventListener('blur', blurHandler);
+    callback(successCallback);
+  };
+  blurHandler = function () {
+    window.clearTimeout(timeout);
+    window.removeEventListener('blur', blurHandler);
+    callback(noHandlerCallback);
+  };
+  window.addEventListener('blur', blurHandler);
+  timeout = window.setTimeout(timeoutHandler, 150000);
+  window.location.href = uri;
+
+
+  
+/*   const timeout = setTimeout(function() {
     failCb();
     handler.remove();
   }, DEFAULT_CUSTOM_PROTOCOL_FAIL_CALLBACK_TIMEOUT);
@@ -170,10 +189,10 @@ const openUriWithTimeoutHack = (uri, failCb, successCb) => {
 
   const handler = registerEvent(target, "blur", onBlur);
 
-  window.location.href = uri;
+  window.location.href = uri; */
 };
 
-const openUriUsingFirefox = (uri, failCb, successCb) => {
+const openUriUsingFirefox = (uri,successCb, failCb) => {
   let iframe = document.querySelector("#hiddenIframe");
 
   if (!iframe) {
@@ -218,7 +237,7 @@ const getBrowserVersion = () => {
   return parseFloat(M[1]);
 };
 
-const protocolCheck = (uri, failCb, successCb, timeout = 2000, unsupportedCb) => {
+const protocolCheck_old = (uri, failCb, successCb, timeout = 2000, unsupportedCb) => {
   const failCallback = () => {
     failCb && failCb();
   };
@@ -235,7 +254,7 @@ const protocolCheck = (uri, failCb, successCb, timeout = 2000, unsupportedCb) =>
     if (browser.isFirefox()) {
       const browserVersion = getBrowserVersion();
       if (browserVersion >= 64) {
-        openUriWithHiddenFrame(uri, failCallback, successCallback);
+        openUriWithHiddenFrame(uri, failCallback, successCallback );
       } else {
         openUriUsingFirefox(uri, failCallback, successCallback);
       }
@@ -267,5 +286,130 @@ const protocolCheck = (uri, failCb, successCb, timeout = 2000, unsupportedCb) =>
     }
   }
 };
+
+const protocolCheck = (uri, successCallback, noHandlerCallback, unknownCallback) => {
+	var  parent, popup, iframe, timer, timeout, blurHandler, timeoutHandler, browser;
+
+	function callback (cb) {
+		if (typeof cb === 'function') cb();
+	}
+
+	function createHiddenIframe (parent) {
+		var iframe;
+		if (!parent) parent = document.body;
+		iframe = document.createElement('iframe');
+		iframe.style.display = 'none';
+		parent.appendChild(iframe);
+		return iframe;
+	}
+
+	function removeHiddenIframe(parent) {
+		if (!iframe) return;
+		if (!parent) parent = document.body;
+		parent.removeChild(iframe);
+		iframe = null;
+	}
+
+	browser = { isChrome: false, isFirefox: false, isIE: false };
+
+	if (window.chrome && !navigator.userAgent.match(/Opera|OPR\//)) {
+		browser.isChrome = true;
+	} else if (typeof InstallTrigger !== 'undefined') {
+		browser.isFirefox = true;
+	} else if ('ActiveXObject' in window) {
+		browser.isIE = true;
+	}
+
+	// Proprietary msLaunchUri method (IE 10+ on Windows 8+)
+	if (navigator.msLaunchUri) {
+		navigator.msLaunchUri(uri, successCallback, noHandlerCallback);
+	}
+	// Blur hack (Chrome)
+	else if (browser.isChrome) {
+		blurHandler = function () {
+			window.clearTimeout(timeout);
+			window.removeEventListener('blur', blurHandler);
+			callback(successCallback);
+		};
+		timeoutHandler = function () {
+			window.removeEventListener('blur', blurHandler);
+			callback(noHandlerCallback);
+		};
+		window.addEventListener('blur', blurHandler);
+		timeout = window.setTimeout(timeoutHandler, 500);
+		window.location.href = uri;
+	}
+	// Catch NS_ERROR_UNKNOWN_PROTOCOL exception (Firefox)
+	else if (browser.isFirefox) {
+      //openUriWithHiddenFrame(uri, successCallback, noHandlerCallback );
+
+      const timeout = setTimeout(function() {
+        noHandlerCallback();
+        handler.remove();
+      }, 5000);
+    
+      let iframe = document.querySelector("#hiddenIframe");
+      if (!iframe) {
+        iframe = createHiddenIframe(document.body, "about:blank");
+      }
+    
+      const onBlur = () => {
+        clearTimeout(timeout);
+        handler.remove();
+        successCallback();
+      };
+      const handler = registerEvent(window, "blur", onBlur);
+      iframe.contentWindow.location.href = uri;
+      
+    // iframe = createHiddenIframe();
+		// try {
+		// 	// if we're still allowed to change the iframe's location, the protocol is registered
+		// 	iframe.contentWindow.location.href = uri;
+		// 	callback(successCallback);
+		// } catch (e) {
+		// 	if (e.name === 'NS_ERROR_UNKNOWN_PROTOCOL') {
+		// 		callback(noHandlerCallback);
+		// 	} else {
+		// 		callback(unknownCallback);
+		// 	}
+		// } finally {
+		// 	removeHiddenIframe();
+		// }
+
+  
+	}
+	// Open popup, change location, check wether we can access the location after the change (IE on Windows < 8)
+	else if (browser.isIE) {
+		popup = window.open('', 'launcher', 'width=0,height=0');
+		popup.location.href = uri;
+		try {
+			// Try to change the popup's location - if it fails, the protocol isn't registered
+			// and we'll end up in the `catch` block.
+			popup.location.href = 'about:blank';
+			callback(successCallback);
+			// The user will be shown a modal dialog to allow the external application. While
+			// this dialog is open, we cannot close the popup, so we try again and again until
+			// we succeed.
+			timer = window.setInterval(function () {
+				popup.close();
+				if (popup.closed) window.clearInterval(timer);
+			}, 500);
+		} catch (e) {
+			// Regain access to the popup in order to close it.
+			popup = window.open('about:blank', 'launcher');
+			popup.close();
+			callback(noHandlerCallback);
+		}
+	}
+	// No hack we can use, just open the URL in an hidden iframe and invoke `unknownCallback`
+	else {
+		iframe = createHiddenIframe();
+		iframe.contentWindow.location.href = uri;
+		window.setTimeout(function () {
+			removeHiddenIframe(parent);
+			callback(unknownCallback);
+		}, 500);
+	}
+}
 
 module.exports = protocolCheck;
